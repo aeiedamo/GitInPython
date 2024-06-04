@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# main file for the tool
 
-import gip
-gip.main()
+import libgip
+
+libgip.main()
