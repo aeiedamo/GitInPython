@@ -522,7 +522,7 @@ def cmd_log(args):
     """
     repo = repo_find()
     print("base giplog:\t")
-    log_graphiz(repo, object_find(repo, args.commit), set())
+    log_graphiz(repo, object_find(repo, args.commit, fmt=b"commit"), set())
     print()
 
 
@@ -561,3 +561,142 @@ def log_graphiz(repo, sha, seen):
         print("\tc_{} -> c_{}".format(sha, p))
         print("\n\t", "-" * 100, "\n")
         log_graphiz(repo, p, seen)
+
+
+argsp = argsubparsers.add_parser("ls-tree", help="print a tree object")
+argsp.add_argument(
+    "-r", dest="recursive", action="store_true", help="recursive into trees"
+)
+argsp.add_argument("tree", help="a tree-like object")
+
+
+def cmd_lstree(args):
+    """
+    kickstarter for ls-tree command.
+    """
+    repo = repo_find()
+    ls_tree(repo, args.tree, args.recursive)
+
+
+def ls_tree(repo, ref, recursive=None, prefix=""):
+    """
+    the actual function to represent a tree object.
+    """
+    sha = object_find(repo, ref, fmt=b"tree")
+    obj = object_read(repo, sha)
+
+    if not obj:
+        raise Exception("object was not found")
+    for item in obj.items:
+        if len(item.mode) == 5:
+            type = item.mode[0:1]
+        else:
+            type = item.mode[0:2]
+
+        match type:
+            case b"04":
+                type = "tree"
+            case b"10":
+                type = "blob"
+            case b"12":
+                type = "blob"
+            case b"16":
+                type = "commit"
+            case _:
+                raise Exception("Abnormal tree object: {}".format(item.mode))
+
+        if not (recursive and type == "tree"):
+            print(
+                "{} {} {}\t{}".format(
+                    "0" * (6 - len(item.mode)) + item.mode.decode("ascii"),
+                    type,
+                    item.sha,
+                    os.path.join(prefix, item.path),
+                )
+            )
+        else:
+            ls_tree(repo, item.sha, recursive, os.path.join(prefix, item.path))
+
+
+class GitTreeLeaf(object):
+    """
+    This defines a git tree leaf object.
+    """
+
+    def __init__(self, mode, path, sha) -> None:
+        self.mode = mode
+        self.path = path
+        self.sha = sha
+
+
+def tree_parse_one(content, start=0):
+    """
+    this parser is made to extract a single record.
+    """
+    x = content.find(b" ", start)
+    assert x - start == 5 or x - start == 6
+    mode = content[start:x]
+    if len(mode) == 5:
+        mode = b" " + mode
+
+    y = content.find(b"\x00", x)
+    path = content[x + 1 : y]
+
+    sha = format(int.from_bytes(content[y + 1, y + 21], "big"), "040x")
+    return (y + 21, GitTreeLeaf(mode, path.decode("utf8"), sha))
+
+
+def tree_parse(content):
+    """
+    this will recall the above function recursively.
+    """
+
+    pos = 0
+    max = len(content)
+    rtn = list()
+    while pos < max:
+        pos, data = tree_parse_one(content, pos)
+        rtn.append(data)
+
+    return rtn
+
+
+def TreeLeaf_SortKey(leaf):
+    """
+    this is an edit due some problems with sorting in python3
+    """
+    if leaf.mode.startwith(b"10"):
+        return leaf.path
+    return leaf.path + "/"
+
+
+def tree_serialize(obj):
+    """
+    to serialize and turn object to sha.
+    """
+
+    obj.items.sort(key=TreeLeaf_SortKey)
+    rtn = b""
+    for i in obj.items:
+        rtn += i.mode
+        rtn += b" "
+        rtn += i.path.encode("utf8")
+        rtn += b"\x00"
+        sha = int(i.sha, 16)
+        rtn += sha.to_bytes(20, byteorder="big")
+    return rtn
+
+
+class GitTree(GitObject):
+    """
+    defines a git tree object.
+    """
+
+    def deserialize(self, data):
+        self.items = tree_parse(data)
+
+    def serialize(self, repo):
+        return tree_serialize(self)
+
+    def init(self):
+        self.items = list()

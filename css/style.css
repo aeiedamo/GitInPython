@@ -1,0 +1,152 @@
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "IBM Plex Sans";
+  color: #f9faf8;
+  background-color: #E5E7EB;
+}
+
+ul {
+  list-style-type: none;
+}
+
+a {
+  text-decoration: none;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  margin: 0;
+}
+
+.header {
+  margin: 0;
+  padding: 2% 10%;
+  background-color: #1f2937;
+  display: flex;
+  flex-direction: row;
+  flex-warp: warp;
+  flex: auto;
+  justify-content: space-between;
+  align-items: center;
+  top: 0;
+}
+
+.header h1 {
+  color: #f9faf8;
+}
+
+.header ul {
+  display: flex;
+  gap: 16px;
+  font-size: 20px;
+  flex-warp: warp;
+}
+.header a {
+  color: #e5e7eb;
+}
+
+.info {
+  margin: 0;
+  padding: 2% 7%;
+  background-color: #1f2937;
+  display: flex;
+  flex-direction: row;
+  flex-warp: warp;
+  flex: auto;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.info .text {
+  margin: 0;
+  padding: 10%;
+  width 35%;
+}
+
+.info .text button {
+  background-color: #3882F6;
+    color: #E5E7EB;
+    font-size: 18px;
+    border: 0;
+    border-radius: 6px;
+    padding: 10px;
+}
+
+.info .text button:hover {
+   background-color: #E5E7EB;
+    color: #3882F6;
+}
+.info img {
+  width: 80%;
+  border-radius: 10px;
+  margin: 0;
+}
+
+.features {
+  margin: 1% 7% 1% 7%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: wrap;
+  flex: auto;
+  justify-content: space-between;
+  background-color: #E5E7EB;
+}
+
+.features h2 {
+    margin: 0;
+    padding: 0;
+    margin-top: 1%;
+    font-weight: 750;
+    color: #1F2937;
+    font-size: 36px;
+    text-align: center;
+}
+
+.features .imageContainer {
+    margin: 2%;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: baseline;
+    justify-content: center;
+}
+
+.features .imageContainer .images {
+    display: table;
+    flex-direction: column;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    flex: auto;
+    color: black;
+    max-width: 20%;
+    float: left;
+    margin: 0 1%;
+}
+
+.features .imageContainer .images img {
+    border: 8px solid rgba(56, 130, 246, 80%);
+    border-radius: 8px;
+    object-fit: cover;
+    height: auto;
+    width: 350px;
+    padding: 10px;
+}
+
+.features .imageContainer .images p {
+  white-space: normal;
+  text-align: center;
+}
+
+
+.about {
+  background-color: #E5E7EB;
+    margin: 0;
+    padding: 5% 15% 5% 15%;
+    align-content: center;
+    font-size: 36px;
+    color: #1F2937;
+}
