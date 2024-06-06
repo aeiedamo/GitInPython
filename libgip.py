@@ -434,3 +434,130 @@ def object_hash(f, fmt, repo=None):
         case _:
             raise Exception("Unknown type: {}".format(fmt))
     return object_write(obj, repo)
+
+
+argsp = argsubparsers.add_parser("log", help="Display history of a commit.")
+argsp.add_argument("commit", default="HEAD", nargs="?", help="commit to start at")
+
+
+class GitCommit(GitObject):
+    """
+    this defines the class git commit and creates its objects.
+    """
+
+    fmt = b"commit"
+
+    def deserialize(self, data):
+        self.kvlm = kvlmParse(data)
+
+    def serialize(self):
+        return kvlmSerialize(self.kvlm)
+
+    def init(self):
+        self.kvlm = dict()
+
+
+def kvlmParse(content, start=0, dct=None):
+    """
+    Key-Value List with Messages.
+    This function will help with parsing the commit fields.
+    """
+
+    if not dct:
+        dct = collections.OrderedDict()
+
+    space = content.find(b" ", start)
+    newLine = content.find(b"\n", start)
+
+    if space < 0 or newLine < space:
+        assert newLine == start
+        dct[None] = content[start + 1 :]
+        return dct
+
+    key = content[start:space]
+    end = start
+
+    while True:
+        end = content.find(b"\n", end + 1)
+        if content[end + 1] != ord(" "):
+            break
+
+    value = content[space + 1 : end].replace(b"\n ", b"\n")
+
+    if key in dct:
+        if isinstance(dct[key], list):
+            dct[key].append(value)
+        else:
+            dct[key] = [dct[key], value]
+    else:
+        dct[key] = value
+
+    return kvlmParse(content, start=end + 1, dct=dct)
+
+
+def kvlmSerialize(kvlm):
+    """
+    to write similar objects like the above function.
+    """
+
+    rtn = b""
+
+    for k in kvlm.keys():
+        if k is None:
+            continue
+        value = kvlm[k]
+        if not isinstance(value, list):
+            value = [value]
+        for v in value:
+            rtn += k + b" " + v.replace(b"\n", b"\n ") + b"\n"
+
+    rtn += b"\n" + kvlm[None] + b"\n"
+
+    return rtn
+
+
+def cmd_log(args):
+    """
+    kickstarter for log command.
+    """
+    repo = repo_find()
+    print("base giplog:\t")
+    log_graphiz(repo, object_find(repo, args.commit), set())
+    print()
+
+
+def log_graphiz(repo, sha, seen):
+    """
+    We will use graphiz software to show log in a graphical representation.
+    """
+    if sha in seen:
+        return
+    seen.add(sha)
+    commit = object_read(repo, sha)
+    if not commit:
+        raise Exception("commit not found")
+    message = commit.kvlm[None].decode("utf8").strip()
+    message = message.replace("\\", "\\\\")
+    message = message.replace('"', '\\"')
+
+    if "\n" in message:
+        message = message[: message.index("\n")]
+
+    print('\tc_{} [label="{}: {}"]'.format(sha, sha[0:7], message))
+    assert commit.fmt == b"commit"
+
+    if b"parent" not in commit.kvlm.keys():
+        return
+
+    parents = commit.kvlm[b"parent"]
+
+    if not isinstance(parents, list):
+        parents = [parents]
+
+    for p in parents:
+        if not p:
+            raise Exception("parent not found.")
+        p = p.decode("ascii")
+        print("\tc_{} -> c_{}".format(sha, p))
+        print("\n\t", "-" * 100, "\n")
+        log_graphiz(repo, p, seen)
