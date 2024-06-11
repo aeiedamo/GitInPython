@@ -8,6 +8,7 @@ import collections
 import configparser
 from datetime import datetime
 import grp
+from os.path import exists
 import pwd
 from fnmatch import fnmatch
 from math import ceil
@@ -74,7 +75,7 @@ def main(argv=sys.argv[1:]):
         case "rm":
             cmd_rm(args)
         case "show-ref":
-            cmd_showred(args)
+            cmd_showref(args)
         case "status":
             cmd_status(args)
         case "tag":
@@ -173,7 +174,7 @@ def repo_dir(repo, *path, mkdir=False):
         if os.path.isdir(path):
             return path
         else:
-            return Exception("{} is not a directory.".format(path))
+            raise Exception("{} is not a directory.".format(path))
 
     if mkdir:
         os.makedirs(path)
@@ -302,7 +303,7 @@ class GitObject(object):
     This class will create a Git object
     """
 
-    def __init__(self, data=None) -> None:
+    def __init__(self, data=None):
         if data:
             self.deserialize(data)
         else:
@@ -436,27 +437,6 @@ def object_hash(f, fmt, repo=None):
     return object_write(obj, repo)
 
 
-argsp = argsubparsers.add_parser("log", help="Display history of a commit.")
-argsp.add_argument("commit", default="HEAD", nargs="?", help="commit to start at")
-
-
-class GitCommit(GitObject):
-    """
-    this defines the class git commit and creates its objects.
-    """
-
-    fmt = b"commit"
-
-    def deserialize(self, data):
-        self.kvlm = kvlmParse(data)
-
-    def serialize(self):
-        return kvlmSerialize(self.kvlm)
-
-    def init(self):
-        self.kvlm = dict()
-
-
 def kvlmParse(content, start=0, dct=None):
     """
     Key-Value List with Messages.
@@ -469,7 +449,7 @@ def kvlmParse(content, start=0, dct=None):
     space = content.find(b" ", start)
     newLine = content.find(b"\n", start)
 
-    if space < 0 or newLine < space:
+    if (space < 0) or (newLine < space):
         assert newLine == start
         dct[None] = content[start + 1 :]
         return dct
@@ -515,6 +495,24 @@ def kvlmSerialize(kvlm):
 
     return rtn
 
+class GitCommit(GitObject):
+    """
+    this defines the class git commit and creates its objects.
+    """
+
+    fmt = b"commit"
+
+    def deserialize(self, data):
+        self.kvlm = kvlmParse(data)
+
+    def serialize(self):
+        return kvlmSerialize(self.kvlm)
+
+    def init(self):
+        self.kvlm = dict()
+
+argsp = argsubparsers.add_parser("log", help="Display history of a commit.")
+argsp.add_argument("commit", default="HEAD", nargs="?", help="commit to start at")
 
 def cmd_log(args):
     """
@@ -522,7 +520,7 @@ def cmd_log(args):
     """
     repo = repo_find()
     print("base giplog:\t")
-    log_graphiz(repo, object_find(repo, args.commit, fmt=b"commit"), set())
+    log_graphiz(repo, object_find(repo, args.commit), set())
     print()
 
 
@@ -534,8 +532,6 @@ def log_graphiz(repo, sha, seen):
         return
     seen.add(sha)
     commit = object_read(repo, sha)
-    if not commit:
-        raise Exception("commit not found")
     message = commit.kvlm[None].decode("utf8").strip()
     message = message.replace("\\", "\\\\")
     message = message.replace('"', '\\"')
@@ -623,6 +619,8 @@ class GitTreeLeaf(object):
     This defines a git tree leaf object.
     """
 
+    fmt = b"tree"
+
     def __init__(self, mode, path, sha) -> None:
         self.mode = mode
         self.path = path
@@ -667,7 +665,8 @@ def TreeLeaf_SortKey(leaf):
     """
     if leaf.mode.startwith(b"10"):
         return leaf.path
-    return leaf.path + "/"
+    else:
+        return leaf.path + "/"
 
 
 def tree_serialize(obj):
@@ -692,11 +691,189 @@ class GitTree(GitObject):
     defines a git tree object.
     """
 
+    fmt = b"tree"
+
     def deserialize(self, data):
         self.items = tree_parse(data)
 
-    def serialize(self, repo):
+    def serialize(self):
         return tree_serialize(self)
 
     def init(self):
         self.items = list()
+
+
+argsp = argsubparsers.add_parser(
+    "checkout", help="checkout a commit inside of a directory"
+)
+argsp.add_argument("commit", help="The commit to checkout")
+argsp.add_argument("path", help="the empty directory to checkout on")
+
+
+def cmd_checkout(args):
+    """
+    a kickstarter function
+    """
+    repo = repo_find()
+    obj = object_read(repo, object_find(repo, args.commit))
+
+    if not obj:
+        raise Exception("No object was found")
+
+    if obj.fmt == b"commit":
+        obj = object_read(repo, obj.kvlm[b"tree"].decode("ascii"))
+
+    if os.os.path.exists(args.path):
+        if not os.path.isdir(args.path):
+            raise Exception("Not a directory: {}".format(args.path))
+        if os.listdir(args.path):
+            raise Exception("Not empty: {}".format(args.path))
+    else:
+        os.makedirs(args.path)
+
+    tree_checkout(repo, obj, os.path.realpath(args.path))
+
+
+def tree_checkout(repo, tree, path):
+    for item in tree.items:
+        obj = object_read(repo, item.sha)
+        dest = os.path.join(path, item.path)
+
+        if obj.fmt == b"tree":
+            os.mkdir(dest)
+            tree_checkout(repo, obj, dest)
+        elif obj.fmt == b"blob":
+            with open(dest, "wb") as f:
+                f.write(obj.blobdata)
+
+
+def ref_resolve(repo, ref):
+    """
+    To evaluate the ref name.
+    """
+    path = repo_file(repo, ref)
+
+    if not os.path.isfile(path):
+        return None
+
+    with open(path, "r") as f:
+        data = f.read()[:-1]
+    if data.startwith("ref:"):
+        return ref_resolve(repo, data[5:])
+    else:
+        return data
+
+
+def ref_list(repo, path=None):
+    """
+    to collect refs and store them in a dict
+    """
+    if not path:
+        path = repo_dir(repo, "refs")
+    rtn = collections.OrderedDict()
+    for f in sorted(os.listdir(path)):
+        can = os.path.join(path, f)
+        if os.path.isdir(can):
+            rtn[f] = ref_list(repo, can)
+        else:
+            rtn[f] = ref_resolve(repo, can)
+    return rtn
+
+
+argsp = argsubparsers.add_parser("show-ref", help="list references")
+
+
+def cmd_showref(args):
+    """
+    kickstrter to show ref
+    """
+
+    repo = repo_find()
+
+    refs = ref_list(repo)
+    show_ref(repo, refs, prefix="refs")
+
+
+def show_ref(repo, refs, with_hash=True, prefix=""):
+    """
+    The actual function to show refs
+    """
+    for k, v in refs.items():
+        if isinstance(v, str):
+            print(
+                "{}{}{}".format(
+                    v + " " if with_hash else "", prefix + "/" if prefix else "", k
+                )
+            )
+        else:
+            show_ref(
+                repo,
+                v,
+                with_hash=with_hash,
+                prefix="{}{}{}".format(prefix, "/" if prefix else "", k),
+            )
+
+
+class GitTree(GitCommit):
+    """
+    This will define the Git Tag class object.
+    """
+
+    fmt = b"tag"
+
+
+argsp = argsubparsers.add_parser("tag", help="List and create tags")
+argsp.add_argument(
+    "-a", action="store_true", dest="create_tag_object", help="to create a tag"
+)
+argsp.add_argument("name", nargs="?", help="tag's name")
+argsp.add_argument("object", default="HEAD", nargs="?", help="The object to point to")
+
+
+def cmd_tag(args):
+    """
+    kickstarter for tag command.
+    """
+    repo = repo_find()
+
+    if args.name:
+        tag_create(
+            repo,
+            args.name,
+            args.object,
+            type="object" if args.create_tag_object else "ref",
+        )
+    else:
+        refs = ref_list(repo)
+        show_ref(repo, refs["tags"], with_hash=False)
+
+
+def tag_create(repo, name, ref, create_tag_object=False):
+    """
+    To call when in need to create a tag object
+    """
+    sha = object_find(repo, ref)
+
+    if create_tag_object:
+        tag = GitTag(repo)
+
+        tag.kvlm = collections.OrderedDict()
+        tag.kvlm[b"object"] = sha.encode()
+        tag.kvlm[b"type"] = b"commit"
+        tag.kvlm[b"tag"] = name.encode()
+        tag.kvlm[b"tagger"] = b"gip <gip@gip.org>"
+        tag.kvlm[None] = b"filler message when creating a tag."
+        tag_sha = object_write(tag)
+
+        ref_create(repo, "tags/" + name, tag_sha)
+
+    else:
+        ref_create(repo, "tags/" + name, sha)
+
+
+def ref_create(repo, ref_name, sha):
+    """
+    To create a ref.
+    """
+    with open(repo_file(repo, "refs/" + ref_name), "w") as f:
+        f.write(sha + "\n")
