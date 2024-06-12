@@ -325,31 +325,33 @@ def object_read(repo, sha):
     """
     path = repo_file(repo, "objects", sha[0:2], sha[2:])
 
-    if not path or not os.path.isfile(path):
+    if not os.path.isfile(path):
         return None
-    with open(path, "rb") as f:
-        content = zlib.decompress(f.read())
-        x = content.find(b" ")
-        fmt = content[0:x]
-        y = content.find(b"\x00", x)
-        size = int(content[x:y].decode("ascii"))
-        if size != len(content) - y - 1:
-            raise Exception("Malformed object {}: bad lenth".format(sha))
 
+    with open (path, "rb") as f:
+        raw = zlib.decompress(f.read())
+
+        # Read object type
+        x = raw.find(b' ')
+        fmt = raw[0:x]
+
+        # Read and validate object size
+        y = raw.find(b'\x00', x)
+        size = int(raw[x:y].decode("ascii"))
+        if size != len(raw)-y-1:
+            raise Exception("Malformed object {0}: bad length".format(sha))
+
+        # Pick constructor
         match fmt:
-            case b"commit":
-                c = GitCommit
-            case b"tree":
-                c = GitTree
-            case b"tag":
-                c = GitTag
-            case b"blob":
-                c = GitBlob
+            case b'commit' : c=GitCommit
+            case b'tree'   : c=GitTree
+            case b'tag'    : c=GitTag
+            case b'blob'   : c=GitBlob
             case _:
-                raise Exception(
-                    "Unkown type {} for object {}".format(fmt.decode("ascii"), sha)
-                )
-        return c(content[y + 1 :])
+                raise Exception("Unknown type {0} for object {1}".format(fmt.decode("ascii"), sha))
+
+        # Call constructor and return object
+        return c(raw[y+1:])
 
 
 def object_write(obj, repo=None):
@@ -437,7 +439,7 @@ def object_hash(f, fmt, repo=None):
     return object_write(obj, repo)
 
 
-def kvlmParse(content, start=0, dct=None):
+def kvlmParse(raw, start=0, dct=None):
     """
     Key-Value List with Messages.
     This function will help with parsing the commit fields.
@@ -445,34 +447,33 @@ def kvlmParse(content, start=0, dct=None):
 
     if not dct:
         dct = collections.OrderedDict()
+    
+    spc = raw.find(b' ', start)
+    nl = raw.find(b'\n', start)
 
-    space = content.find(b" ", start)
-    newLine = content.find(b"\n", start)
-
-    if (space < 0) or (newLine < space):
-        assert newLine == start
-        dct[None] = content[start + 1 :]
+    if (spc < 0) or (nl < spc):
+        assert nl == start
+        dct[None] = raw[start+1:]
         return dct
+    
+    key = raw[start:spc]
 
-    key = content[start:space]
     end = start
-
     while True:
-        end = content.find(b"\n", end + 1)
-        if content[end + 1] != ord(" "):
-            break
+        end = raw.find(b'\n', end+1)
+        if raw[end+1] != ord(' '): break
 
-    value = content[space + 1 : end].replace(b"\n ", b"\n")
+    value = raw[spc+1:end].replace(b'\n ', b'\n')
 
     if key in dct:
-        if isinstance(dct[key], list):
+        if type(dct[key]) == list:
             dct[key].append(value)
         else:
-            dct[key] = [dct[key], value]
+            dct[key] = [ dct[key], value ]
     else:
-        dct[key] = value
+        dct[key]=value
 
-    return kvlmParse(content, start=end + 1, dct=dct)
+    return kvlmParse(raw, start=end+1, dct=dct)
 
 
 def kvlmSerialize(kvlm):
@@ -495,6 +496,7 @@ def kvlmSerialize(kvlm):
 
     return rtn
 
+
 class GitCommit(GitObject):
     """
     this defines the class git commit and creates its objects.
@@ -511,8 +513,10 @@ class GitCommit(GitObject):
     def init(self):
         self.kvlm = dict()
 
+
 argsp = argsubparsers.add_parser("log", help="Display history of a commit.")
 argsp.add_argument("commit", default="HEAD", nargs="?", help="commit to start at")
+
 
 def cmd_log(args):
     """
@@ -532,6 +536,8 @@ def log_graphiz(repo, sha, seen):
         return
     seen.add(sha)
     commit = object_read(repo, sha)
+    if not commit or commit.fmt != b"commit":
+        raise Exception("The object is not a commit object")
     message = commit.kvlm[None].decode("utf8").strip()
     message = message.replace("\\", "\\\\")
     message = message.replace('"', '\\"')
@@ -575,42 +581,30 @@ def cmd_lstree(args):
 
 
 def ls_tree(repo, ref, recursive=None, prefix=""):
-    """
-    the actual function to represent a tree object.
-    """
     sha = object_find(repo, ref, fmt=b"tree")
     obj = object_read(repo, sha)
-
-    if not obj:
-        raise Exception("object was not found")
     for item in obj.items:
         if len(item.mode) == 5:
             type = item.mode[0:1]
         else:
             type = item.mode[0:2]
 
-        match type:
-            case b"04":
-                type = "tree"
-            case b"10":
-                type = "blob"
-            case b"12":
-                type = "blob"
-            case b"16":
-                type = "commit"
-            case _:
-                raise Exception("Abnormal tree object: {}".format(item.mode))
+        match type: # Determine the type.
+            case b'04': type = "tree"
+            case b'10': type = "blob" # A regular file.
+            case b'12': type = "blob" # A symlink. Blob contents is link target.
+            case b'16': type = "commit" # A submodule
+            case _: raise Exception("Weird tree leaf mode {}".format(item.mode))
 
-        if not (recursive and type == "tree"):
-            print(
-                "{} {} {}\t{}".format(
-                    "0" * (6 - len(item.mode)) + item.mode.decode("ascii"),
-                    type,
-                    item.sha,
-                    os.path.join(prefix, item.path),
-                )
-            )
-        else:
+        if not (recursive and type=='tree'): # This is a leaf
+            print("{0} {1} {2}\t{3}".format(
+                "0" * (6 - len(item.mode)) + item.mode.decode("ascii"),
+                # Git's ls-tree displays the type
+                # of the object pointed to.  We can do that too :)
+                type,
+                item.sha,
+                os.path.join(prefix, item.path)))
+        else: # This is a branch, recurse
             ls_tree(repo, item.sha, recursive, os.path.join(prefix, item.path))
 
 
@@ -619,9 +613,7 @@ class GitTreeLeaf(object):
     This defines a git tree leaf object.
     """
 
-    fmt = b"tree"
-
-    def __init__(self, mode, path, sha) -> None:
+    def __init__(self, mode, path, sha):
         self.mode = mode
         self.path = path
         self.sha = sha
